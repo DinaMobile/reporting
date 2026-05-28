@@ -1,0 +1,1209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GP Contribution Report — Simulator</title>
+<script>
+// Password gate — runs before anything else loads
+(function() {
+  const PASS = 'Sinch2026!';
+  const SESSION_KEY = 'gp_auth';
+  if (sessionStorage.getItem(SESSION_KEY) === '1') return; // already authenticated this session
+  document.addEventListener('DOMContentLoaded', function() {
+    var gate = document.getElementById('pw-gate');
+    var app  = document.getElementById('app-root');
+    gate.style.display = 'flex';
+    app.style.display  = 'none';
+    document.getElementById('pw-input').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') tryUnlock();
+    });
+  });
+  window.tryUnlock = function() {
+    var val = document.getElementById('pw-input').value;
+    var err = document.getElementById('pw-error');
+    if (val === PASS) {
+      sessionStorage.setItem(SESSION_KEY, '1');
+      document.getElementById('pw-gate').style.display = 'none';
+      document.getElementById('app-root').style.display = 'block';
+      // trigger charts init now that canvas elements are visible
+      if (window.__initCharts) window.__initCharts();
+    } else {
+      err.style.display = 'block';
+      document.getElementById('pw-input').value = '';
+      document.getElementById('pw-input').focus();
+      setTimeout(function(){ err.style.display='none'; }, 2500);
+    }
+  };
+})();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js" integrity="sha384-iU8HYtnGQ8Cy4zl7gbNMOhsDTTKX02BTXptVP/vqAWIaTfM7isw76iyZCsjL2eVi" crossorigin="anonymous"></script>
+<style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #F8FAFC; color: #1E293B; font-size: 14px; }
+
+/* ── HEADER ── */
+.header { background: white; border-bottom: 1px solid #E2E8F0; padding: 14px 32px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 200; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+.header-left h1 { font-size: 17px; font-weight: 700; color: #0F172A; }
+.header-left p { font-size: 12px; color: #64748B; margin-top: 1px; }
+.header-right { display: flex; align-items: center; gap: 16px; }
+.sim-badge { background: #FEF3C7; color: #92400E; font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 4px; letter-spacing: 0.05em; }
+.currency-toggle { display: flex; background: #F1F5F9; border-radius: 8px; padding: 3px; gap: 2px; }
+.currency-btn { padding: 5px 14px; border-radius: 6px; border: none; cursor: pointer; font-size: 12px; font-weight: 600; background: transparent; color: #64748B; transition: all 0.15s; }
+.currency-btn.active { background: white; color: #0F172A; box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+
+/* ── NAV ── */
+.section-nav { background: white; border-bottom: 1px solid #E2E8F0; padding: 0 32px; display: flex; gap: 0; }
+.nav-item { padding: 12px 18px; font-size: 13px; font-weight: 500; color: #64748B; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; white-space: nowrap; }
+.nav-item:hover { color: #2563EB; }
+.nav-item.active { color: #2563EB; border-bottom-color: #2563EB; }
+
+/* ── MAIN ── */
+.main { max-width: 1320px; margin: 0 auto; padding: 28px 32px 60px; }
+
+/* ── SECTION HEADERS ── */
+.section-block { margin-bottom: 32px; }
+.section-header { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+.section-num { background: #2563EB; color: white; font-size: 11px; font-weight: 700; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.section-title { font-size: 16px; font-weight: 700; color: #0F172A; }
+.section-desc { font-size: 13px; color: #64748B; margin-top: 2px; }
+
+/* ── CARDS ── */
+.card { background: white; border-radius: 12px; border: 1px solid #E2E8F0; padding: 22px; margin-bottom: 20px; }
+.card-title { font-size: 14px; font-weight: 600; color: #0F172A; margin-bottom: 4px; }
+.card-sub { font-size: 12px; color: #64748B; margin-bottom: 16px; }
+
+/* ── CHIPS ── */
+.chips-wrap { display: flex; flex-wrap: wrap; gap: 5px; max-height: 130px; overflow-y: auto; padding: 12px; background: #F8FAFC; border-radius: 8px; border: 1px solid #E2E8F0; margin-bottom: 12px; }
+.chip { display: inline-flex; align-items: center; gap: 3px; padding: 3px 9px; border-radius: 20px; font-size: 11px; font-weight: 500; }
+.chip-active { background: #DBEAFE; color: #1D4ED8; }
+.chip-cancelled { background: #FEE2E2; color: #B91C1C; text-decoration: line-through; opacity: 0.8; }
+.chip-count { background: #E2E8F0; color: #475569; font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 20px; }
+
+/* ── FILTERS ROW ── */
+.filters-row { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 0; }
+.filter-group { display: flex; flex-direction: column; gap: 4px; }
+.filter-label { font-size: 11px; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 0.05em; }
+.filter-select, .filter-date { padding: 7px 11px; border: 1px solid #E2E8F0; border-radius: 8px; font-size: 13px; color: #0F172A; background: white; cursor: pointer; outline: none; }
+.filter-select:focus, .filter-date:focus { border-color: #3B82F6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+
+/* ── METRICS GRID ── */
+.metrics-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
+.metrics-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
+.metrics-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 20px; }
+.metric-card { background: white; border-radius: 12px; border: 1px solid #E2E8F0; padding: 18px 20px; }
+.metric-label { font-size: 11px; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
+.metric-value { font-size: 26px; font-weight: 800; color: #0F172A; line-height: 1; }
+.metric-value.green { color: #16A34A; }
+.metric-value.blue { color: #2563EB; }
+.metric-sub { font-size: 12px; color: #94A3B8; margin-top: 5px; }
+
+/* ── GP HIGHLIGHT ── */
+.gp-card { background: linear-gradient(135deg, #EFF6FF 0%, #DBEAFE 100%); border: 1px solid #BFDBFE; border-radius: 12px; padding: 22px; margin-bottom: 20px; }
+.gp-card .metric-value { font-size: 32px; color: #1D4ED8; }
+.gp-card .metric-label { color: #3B82F6; }
+.gp-percent { font-size: 18px; font-weight: 700; color: #2563EB; margin-top: 4px; }
+
+/* ── PROJECTED BANNER ── */
+.proj-banner { background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 8px; padding: 10px 14px; font-size: 12px; color: #92400E; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+.proj-banner svg { flex-shrink: 0; }
+
+/* ── COST INPUTS ── */
+.costs-collapsible { margin-bottom: 20px; }
+.costs-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 10px 0; font-size: 13px; font-weight: 600; color: #374151; border-bottom: 1px solid #E2E8F0; user-select: none; }
+.costs-toggle svg { transition: transform 0.2s; }
+.costs-toggle.open svg { transform: rotate(180deg); }
+.costs-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px 0; }
+.cost-field { display: flex; flex-direction: column; gap: 4px; }
+.cost-field label { font-size: 11px; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 0.04em; }
+.cost-field input { padding: 8px 10px; border: 1px solid #E2E8F0; border-radius: 8px; font-size: 13px; color: #0F172A; outline: none; transition: border-color 0.15s; }
+.cost-field input:focus { border-color: #3B82F6; box-shadow: 0 0 0 3px rgba(59,130,246,0.1); }
+.cost-field input::placeholder { color: #CBD5E1; }
+
+/* ── CHARTS ROW ── */
+.charts-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+.charts-3col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+.chart-card { background: white; border-radius: 12px; border: 1px solid #E2E8F0; padding: 20px; }
+.chart-title { font-size: 13px; font-weight: 600; color: #0F172A; margin-bottom: 2px; }
+.chart-sub { font-size: 11px; color: #64748B; margin-bottom: 14px; }
+.chart-canvas-wrap { position: relative; height: 220px; }
+.chart-canvas-wrap.tall { height: 280px; }
+
+/* ── TABLES ── */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th { background: #F8FAFC; padding: 9px 12px; text-align: left; font-size: 11px; font-weight: 700; color: #64748B; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid #E2E8F0; white-space: nowrap; }
+tbody td { padding: 9px 12px; border-bottom: 1px solid #F1F5F9; color: #374151; white-space: nowrap; }
+tbody tr:hover td { background: #F8FAFC; }
+.sortable { cursor: pointer; user-select: none; }
+.sortable:hover { color: #2563EB; }
+
+/* ── STATUS BADGES ── */
+.badge-active { display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; background: #DCFCE7; color: #15803D; border-radius: 20px; font-size: 11px; font-weight: 600; }
+.badge-cancelled { display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; background: #FEE2E2; color: #B91C1C; border-radius: 20px; font-size: 11px; font-weight: 600; }
+
+/* ── HORIZONTAL BARS ── */
+.hbar-list { display: flex; flex-direction: column; gap: 6px; max-height: 380px; overflow-y: auto; }
+.hbar-row { display: flex; align-items: center; gap: 10px; }
+.hbar-name { font-size: 11px; color: #64748B; width: 160px; text-align: right; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbar-track { flex: 1; background: #F1F5F9; border-radius: 4px; height: 18px; position: relative; overflow: hidden; }
+.hbar-fill { background: #3B82F6; height: 100%; border-radius: 4px; transition: width 0.5s; }
+.hbar-fill.highlight { background: #10B981; }
+.hbar-val { font-size: 11px; color: #374151; width: 68px; flex-shrink: 0; font-weight: 500; }
+.avg-line-marker { position: absolute; top: 0; width: 2px; height: 100%; background: #F59E0B; z-index: 2; }
+
+/* ── SPENDING ── */
+.spend-table { width: 100%; border-collapse: collapse; }
+.spend-table tr td { padding: 8px 0; border-bottom: 1px solid #F1F5F9; font-size: 13px; }
+.spend-table tr:last-child td { border-bottom: none; }
+.spend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 8px; flex-shrink: 0; }
+.spend-cat { color: #374151; }
+.spend-amt { font-weight: 600; color: #0F172A; text-align: right; }
+.spend-pct { color: #94A3B8; font-size: 12px; text-align: right; }
+
+/* ── CHANNEL TABLE ── */
+.channel-sub { font-size: 12px; color: #94A3B8; margin-top: 2px; }
+
+/* ── DIVIDER ── */
+hr.section-div { border: none; border-top: 1px solid #E2E8F0; margin: 32px 0; }
+
+/* ── DEEP LINK ── */
+.deep-link { font-size: 12px; color: #2563EB; cursor: pointer; text-decoration: underline; text-decoration-style: dotted; }
+
+/* ── INFO TAG ── */
+.info-tag { display: inline-block; background: #F1F5F9; color: #64748B; font-size: 11px; padding: 2px 7px; border-radius: 4px; margin-left: 6px; }
+
+/* ── TABLE FILTER ROW ── */
+.table-controls { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.table-search { padding: 7px 11px; border: 1px solid #E2E8F0; border-radius: 8px; font-size: 13px; outline: none; width: 220px; }
+.table-search:focus { border-color: #3B82F6; }
+
+/* ── SCROLLABLE ── */
+.scrollable-table { max-height: 360px; overflow-y: auto; }
+
+/* ── FOOTER ── */
+.footer { text-align: center; padding: 40px 0 20px; color: #CBD5E1; font-size: 12px; }
+
+/* ── TOOLTIP ── */
+.has-tip { border-bottom: 1px dashed #CBD5E1; cursor: help; }
+
+@media (max-width: 900px) {
+  .metrics-4 { grid-template-columns: repeat(2, 1fr); }
+  .charts-2col { grid-template-columns: 1fr; }
+  .costs-grid { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ PASSWORD GATE ═══════════════ -->
+<div id="pw-gate" style="display:none;position:fixed;inset:0;background:linear-gradient(135deg,#0F172A 0%,#1E3A5F 100%);z-index:9999;align-items:center;justify-content:center;flex-direction:column;">
+  <div style="background:white;border-radius:16px;padding:40px 48px;width:100%;max-width:400px;box-shadow:0 25px 60px rgba(0,0,0,0.4);text-align:center;">
+    <div style="width:52px;height:52px;background:#EFF6FF;border-radius:12px;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="3" y="11" width="18" height="11" rx="2" stroke="#2563EB" stroke-width="2"/><path d="M7 11V7a5 5 0 0110 0v4" stroke="#2563EB" stroke-width="2" stroke-linecap="round"/></svg>
+    </div>
+    <div style="font-size:11px;font-weight:700;color:#94A3B8;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:6px;">Sinch Engage</div>
+    <h2 style="font-size:20px;font-weight:800;color:#0F172A;margin-bottom:6px;">GP Contribution Report</h2>
+    <p style="font-size:13px;color:#64748B;margin-bottom:28px;">Enter the access password to continue</p>
+    <input id="pw-input" type="password" placeholder="Password" autocomplete="current-password"
+      style="width:100%;padding:11px 14px;border:1.5px solid #E2E8F0;border-radius:10px;font-size:15px;outline:none;color:#0F172A;margin-bottom:12px;transition:border-color 0.15s;"
+      onfocus="this.style.borderColor='#3B82F6'" onblur="this.style.borderColor='#E2E8F0'">
+    <div id="pw-error" style="display:none;background:#FEE2E2;color:#B91C1C;font-size:13px;font-weight:600;border-radius:8px;padding:8px 12px;margin-bottom:12px;">
+      Incorrect password — please try again
+    </div>
+    <button onclick="tryUnlock()"
+      style="width:100%;padding:12px;background:#2563EB;color:white;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;transition:background 0.15s;"
+      onmouseover="this.style.background='#1D4ED8'" onmouseout="this.style.background='#2563EB'">
+      Unlock Report
+    </button>
+    <p style="font-size:11px;color:#CBD5E1;margin-top:20px;">Internal use only · Simulator · Dummy data</p>
+  </div>
+</div>
+
+<!-- ═══════════════ APP ROOT ═══════════════ -->
+<div id="app-root">
+
+<!-- ═══════════════ HEADER ═══════════════ -->
+<div class="header">
+  <div class="header-left">
+    <h1>GP Contribution Report</h1>
+    <p>Account-level revenue, cost and gross profit overview — Sinch Engage / MessageMedia</p>
+  </div>
+  <div class="header-right">
+    <span class="sim-badge">SIMULATOR</span>
+    <div class="currency-toggle">
+      <button class="currency-btn active" onclick="setCurrency('USD')">USD</button>
+      <button class="currency-btn" onclick="setCurrency('AUD')">AUD</button>
+      <button class="currency-btn" onclick="setCurrency('SEK')">SEK</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ SECTION NAV ═══════════════ -->
+<div class="section-nav">
+  <div class="nav-item active" onclick="scrollTo('s1')">① Segment</div>
+  <div class="nav-item" onclick="scrollTo('s2')">② Financial Summary</div>
+  <div class="nav-item" onclick="scrollTo('s3')">③ Business Characteristics</div>
+  <div class="nav-item" onclick="scrollTo('s4')">④ Spending Breakdown</div>
+  <div class="nav-item" onclick="scrollTo('s5')">⑤ Messaging Volumes</div>
+</div>
+
+<!-- ═══════════════ MAIN ═══════════════ -->
+<div class="main">
+
+<!-- ──────────── SECTION 1: SEGMENT ──────────── -->
+<div class="section-block" id="s1">
+  <div class="section-header">
+    <div class="section-num">1</div>
+    <div>
+      <div class="section-title">Segment Definition &amp; Filters</div>
+      <div class="section-desc">50 accounts pre-selected (multi-select simulation) · Billing period: Jan 2025 – Jun 2025</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Selected Accounts <span class="info-tag">50 accounts</span></div>
+    <div class="card-sub">Multi-select from organisations active in the last 12 months. Scroll to see all. <span style="color:#B91C1C;">Red strikethrough</span> = cancelled.</div>
+    <div class="chips-wrap" id="accountChips"></div>
+    <div style="display:flex;gap:12px;align-items:center;margin-top:8px;">
+      <span class="chip chip-active">● 40 Active</span>
+      <span class="chip chip-cancelled">● 10 Cancelled</span>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #F1F5F9;margin:20px 0;">
+
+    <div class="filters-row">
+      <div class="filter-group">
+        <div class="filter-label">Account Status</div>
+        <select class="filter-select" id="statusFilter" onchange="applyFilters()">
+          <option value="all">All Statuses</option>
+          <option value="active">Active Only</option>
+          <option value="cancelled">Cancelled Only</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <div class="filter-label">Billing From</div>
+        <input type="date" class="filter-date" id="dateFrom" value="2025-01-01">
+      </div>
+      <div class="filter-group">
+        <div class="filter-label">Billing To</div>
+        <input type="date" class="filter-date" id="dateTo" value="2025-06-30">
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr class="section-div">
+
+<!-- ──────────── SECTION 2: FINANCIAL SUMMARY ──────────── -->
+<div class="section-block" id="s2">
+  <div class="section-header">
+    <div class="section-num">2</div>
+    <div>
+      <div class="section-title">Financial Summary</div>
+      <div class="section-desc">Revenue generated by the selected segment, costs, GP and GP margin for the selected period</div>
+    </div>
+  </div>
+
+  <div class="proj-banner" id="projBanner">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7.5" stroke="#D97706"/><path d="M8 5v4M8 10.5v.5" stroke="#D97706" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span><strong>Projected costs in use.</strong> No manual costs entered — costs are auto-calculated as 42% of segment revenue. Enter actual costs below to override.</span>
+  </div>
+
+  <div class="metrics-4">
+    <div class="metric-card">
+      <div class="metric-label">Revenue</div>
+      <div class="metric-value" id="metRevenue">$1,133,700</div>
+      <div class="metric-sub">Invoices paid · Jan–Jun 2025</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Total Costs</div>
+      <div class="metric-value" id="metCosts">$476,154</div>
+      <div class="metric-sub" id="costsNote">42% projected (no inputs)</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Gross Profit</div>
+      <div class="metric-value green" id="metGP">$657,546</div>
+      <div class="metric-sub">Revenue − Total Costs</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">GP Margin</div>
+      <div class="metric-value blue" id="metMargin">58.0%</div>
+      <div class="metric-sub">GP ÷ Revenue × 100</div>
+    </div>
+  </div>
+
+  <!-- Cost Inputs -->
+  <div class="card costs-collapsible">
+    <div class="costs-toggle" id="costsToggle" onclick="toggleCosts()">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="#374151" stroke-width="1.5" stroke-linecap="round"/></svg>
+      Enter Actual Costs (optional — overrides the 42% projection)
+    </div>
+    <div id="costsBody" style="display:none;">
+      <div class="costs-grid">
+        <div class="cost-field"><label>Salary (monthly avg)</label><input type="number" placeholder="e.g. 85000" id="cSalary" oninput="recalcCosts()"></div>
+        <div class="cost-field"><label>Engineering (monthly avg)</label><input type="number" placeholder="e.g. 40000" id="cEng" oninput="recalcCosts()"></div>
+        <div class="cost-field"><label>Design (monthly avg)</label><input type="number" placeholder="e.g. 12000" id="cDesign" oninput="recalcCosts()"></div>
+        <div class="cost-field"><label>Product (monthly avg)</label><input type="number" placeholder="e.g. 18000" id="cProduct" oninput="recalcCosts()"></div>
+        <div class="cost-field"><label>Infrastructure (monthly avg)</label><input type="number" placeholder="e.g. 9000" id="cInfra" oninput="recalcCosts()"></div>
+        <div class="cost-field"><label>Support (monthly avg)</label><input type="number" placeholder="e.g. 6000" id="cSupport" oninput="recalcCosts()"></div>
+        <div class="cost-field"><label>Maintenance / Other</label><input type="number" placeholder="e.g. 5000" id="cMaint" oninput="recalcCosts()"></div>
+        <div class="cost-field"><label>Other Costs</label><input type="number" placeholder="e.g. 3000" id="cOther" oninput="recalcCosts()"></div>
+      </div>
+      <div style="font-size:12px;color:#94A3B8;padding-top:4px;">All values in <span id="costsCurrencyLabel">USD</span> per month. Period is 6 months — monthly values × 6 applied automatically.</div>
+    </div>
+  </div>
+
+  <!-- Engage GP Contribution -->
+  <div class="charts-2col">
+    <div class="gp-card">
+      <div class="metric-label" style="color:#3B82F6;">Engage GP — Segment Contribution</div>
+      <div class="metric-value" style="font-size:32px;color:#1D4ED8;" id="engageGPContrib">8.2%</div>
+      <div style="font-size:13px;color:#3B82F6;margin-top:6px;">of total Sinch Engage GP · Jan–Jun 2025</div>
+      <hr style="border:none;border-top:1px solid #BFDBFE;margin:14px 0;">
+      <div style="display:flex;justify-content:space-between;font-size:13px;">
+        <div>
+          <div style="color:#64748B;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">Total Engage GP</div>
+          <div style="font-weight:700;color:#0F172A;" id="totalEngageGP">$8,000,000</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="color:#64748B;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">Your Segment GP</div>
+          <div style="font-weight:700;color:#1D4ED8;" id="segGPDisplay">$657,546</div>
+        </div>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Segment vs Total Engage GP</div>
+      <div class="chart-sub">Gross profit contribution from selected segment</div>
+      <div class="chart-canvas-wrap"><canvas id="gpPieChart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<hr class="section-div">
+
+<!-- ──────────── SECTION 3: BUSINESS CHARACTERISTICS ──────────── -->
+<div class="section-block" id="s3">
+  <div class="section-header">
+    <div class="section-num">3</div>
+    <div>
+      <div class="section-title">Business Characteristics</div>
+      <div class="section-desc">Account details, lifecycle, usage metrics and composition of the selected segment</div>
+    </div>
+  </div>
+
+  <!-- Metric tiles -->
+  <div class="metrics-4">
+    <div class="metric-card">
+      <div class="metric-label">Avg Account LTV</div>
+      <div class="metric-value blue" id="metLTV">4.1 yrs</div>
+      <div class="metric-sub">Across all 50 accounts</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Avg Sub-accounts</div>
+      <div class="metric-value" id="metSubaccounts">2.9</div>
+      <div class="metric-sub">Per parent account</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Avg Active Users</div>
+      <div class="metric-value" id="metUsers">41.4</div>
+      <div class="metric-sub">Per account</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Avg Dedicated Numbers</div>
+      <div class="metric-value" id="metPhones">7.2</div>
+      <div class="metric-sub">Per account</div>
+    </div>
+  </div>
+
+  <!-- Composition + Creation Year -->
+  <div class="charts-2col">
+    <div class="chart-card">
+      <div class="chart-title">Segment Composition</div>
+      <div class="chart-sub">Active vs Cancelled accounts · click slices to filter table</div>
+      <div class="chart-canvas-wrap"><canvas id="compositionChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Accounts by Registration Year</div>
+      <div class="chart-sub">Count and % of total per year</div>
+      <div class="chart-canvas-wrap"><canvas id="yearChart"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Account Detail Table -->
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div>
+        <div class="card-title">Account Detail Table</div>
+        <div class="card-sub" style="margin-bottom:0;">All accounts contributing to the report. Sortable by any column.</div>
+      </div>
+      <div class="table-controls">
+        <input type="text" class="table-search" placeholder="Search account name or ID…" id="tableSearch" oninput="renderAccountTable()">
+        <select class="filter-select" id="tableStatusFilter" onchange="renderAccountTable()">
+          <option value="all">All Statuses</option>
+          <option value="active">Active</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </div>
+    </div>
+    <div class="table-wrap scrollable-table">
+      <table id="accountTable">
+        <thead>
+          <tr>
+            <th class="sortable" onclick="sortTable('name')">Account Name ↕</th>
+            <th class="sortable" onclick="sortTable('id')">Account ID ↕</th>
+            <th>Status</th>
+            <th>Industry</th>
+            <th class="sortable" onclick="sortTable('created')">Created ↕</th>
+            <th>Cancelled</th>
+            <th class="sortable" onclick="sortTable('ltv')">LTV ↕</th>
+            <th class="sortable" onclick="sortTable('users')">Users ↕</th>
+            <th class="sortable" onclick="sortTable('msgVol')">Msg Volume ↕</th>
+            <th class="sortable" onclick="sortTable('phones')">Numbers ↕</th>
+          </tr>
+        </thead>
+        <tbody id="accountTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Avg Outbound Messaging Volume Bars -->
+  <div class="card">
+    <div class="card-title">Avg Outbound Messaging Volume per Account</div>
+    <div class="card-sub">Horizontal bar chart — sorted descending. 🟡 Average reference line shown.</div>
+    <div class="hbar-list" id="msgBars"></div>
+  </div>
+</div>
+
+<hr class="section-div">
+
+<!-- ──────────── SECTION 4: SPENDING BREAKDOWN ──────────── -->
+<div class="section-block" id="s4">
+  <div class="section-header">
+    <div class="section-num">4</div>
+    <div>
+      <div class="section-title">Spending Breakdown</div>
+      <div class="section-desc">How segment spend is distributed across invoice categories — sorted by contribution</div>
+    </div>
+  </div>
+
+  <div class="charts-2col">
+    <div class="chart-card">
+      <div class="chart-title">Spend by Category</div>
+      <div class="chart-sub">% of total segment spend · hover for amounts</div>
+      <div class="chart-canvas-wrap tall"><canvas id="spendPieChart"></canvas></div>
+    </div>
+    <div class="card" style="margin-bottom:0;">
+      <div class="card-title">Category Breakdown</div>
+      <div class="card-sub">Source: invoice decomposition for selected accounts &amp; period</div>
+      <div class="table-wrap">
+        <table class="spend-table" id="spendTable"></table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr class="section-div">
+
+<!-- ──────────── SECTION 5: MESSAGING VOLUMES ──────────── -->
+<div class="section-block" id="s5">
+  <div class="section-header">
+    <div class="section-num">5</div>
+    <div>
+      <div class="section-title">Messaging Volumes</div>
+      <div class="section-desc">Outbound messaging activity for the selected segment vs total Engage platform volume</div>
+    </div>
+  </div>
+
+  <div class="metrics-2">
+    <div class="metric-card">
+      <div class="metric-label">Segment Outbound Volume</div>
+      <div class="metric-value" id="metSegVol">8,413,000</div>
+      <div class="metric-sub">Messages · Jan–Jun 2025</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">Total Engage Outbound Volume</div>
+      <div class="metric-value" id="metTotalVol">100,000,000</div>
+      <div class="metric-sub">All platform accounts · same period</div>
+    </div>
+  </div>
+
+  <div class="charts-2col">
+    <div class="chart-card">
+      <div class="chart-title">Selected Segment vs Total Engage</div>
+      <div class="chart-sub">Share of total outbound message count</div>
+      <div class="chart-canvas-wrap"><canvas id="msgPieChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Channel Utilisation Breakdown</div>
+      <div class="chart-sub">Avg outbound messages by sending channel across segment</div>
+      <div class="chart-canvas-wrap"><canvas id="channelChart"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Account Messaging Detail Table -->
+  <div class="card">
+    <div class="card-title">Account Messaging Detail</div>
+    <div class="card-sub">Sorted by total outbound volume (descending). Monthly breakdown included.</div>
+    <div class="table-wrap scrollable-table">
+      <table id="msgTable">
+        <thead>
+          <tr>
+            <th>Account Name</th>
+            <th>Status</th>
+            <th class="sortable" onclick="sortMsgTable('msgVol')">Total Volume ↕</th>
+            <th>Jan 2025</th><th>Feb 2025</th><th>Mar 2025</th>
+            <th>Apr 2025</th><th>May 2025</th><th>Jun 2025</th>
+          </tr>
+        </thead>
+        <tbody id="msgTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Channel Utilisation per account sub-table -->
+  <div class="card">
+    <div class="card-title">Channel Utilisation per Account <span class="info-tag">Top 15 by volume</span></div>
+    <div class="card-sub">Breakdown of outbound messages by sending channel for each account</div>
+    <div class="table-wrap scrollable-table">
+      <table id="channelTable">
+        <thead>
+          <tr>
+            <th>Account Name</th>
+            <th>CRM<br><span class="channel-sub">HubSpot/Zoho/SF</span></th>
+            <th>Engage HUB<br><span class="channel-sub">Web interface</span></th>
+            <th>Sinch Mobile<br><span class="channel-sub">App</span></th>
+            <th>email2SMS</th>
+            <th>Other</th>
+            <th>Total</th>
+          </tr>
+        </thead>
+        <tbody id="channelTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  GP Contribution Report Simulator · Dummy data only · Not for production use<br>
+  Sinch Engage / MessageMedia · Generated for internal PM tooling review
+</div>
+
+</div><!-- end main -->
+</div><!-- end app-root -->
+
+<!-- ═══════════════ SCRIPTS ═══════════════ -->
+<script>
+// ─────────────────────────────────────────────
+// DATA: 50 DUMMY ACCOUNTS
+// ─────────────────────────────────────────────
+const ACCOUNTS = [
+  // Queensland (10)
+  {id:'QLD-TST-001',name:'Queensland Hospital Test 001',status:'active',industry:'Healthcare',created:'2019-03-15',cancelled:null,users:45,subaccounts:3,phones:8,revenue:38500,msgVol:285000},
+  {id:'QLD-TST-002',name:'Queensland Logistics Test 002',status:'active',industry:'Logistics',created:'2020-07-22',cancelled:null,users:28,subaccounts:2,phones:5,revenue:22300,msgVol:167000},
+  {id:'QLD-TST-003',name:'Queensland Retail Test 003',status:'cancelled',industry:'Retail',created:'2018-11-10',cancelled:'2025-08-30',users:12,subaccounts:1,phones:3,revenue:4200,msgVol:31000},
+  {id:'QLD-TST-004',name:'Queensland Finance Test 004',status:'active',industry:'Finance',created:'2021-02-28',cancelled:null,users:67,subaccounts:5,phones:12,revenue:54600,msgVol:412000},
+  {id:'QLD-TST-005',name:'Queensland Education Test 005',status:'active',industry:'Education',created:'2020-09-01',cancelled:null,users:33,subaccounts:2,phones:6,revenue:9800,msgVol:67000},
+  {id:'QLD-TST-006',name:'Queensland Insurance Test 006',status:'active',industry:'Insurance',created:'2022-01-15',cancelled:null,users:18,subaccounts:1,phones:4,revenue:7600,msgVol:52000},
+  {id:'QLD-TST-007',name:'Queensland Property Test 007',status:'cancelled',industry:'Real Estate',created:'2019-06-20',cancelled:'2025-12-01',users:8,subaccounts:1,phones:2,revenue:3100,msgVol:18000},
+  {id:'QLD-TST-008',name:'Queensland Transport Test 008',status:'active',industry:'Transport',created:'2021-04-11',cancelled:null,users:52,subaccounts:4,phones:9,revenue:28300,msgVol:210000},
+  {id:'QLD-TST-009',name:'Queensland Telecom Test 009',status:'active',industry:'Telecom',created:'2018-08-30',cancelled:null,users:91,subaccounts:7,phones:15,revenue:55900,msgVol:432000},
+  {id:'QLD-TST-010',name:'Queensland Media Test 010',status:'active',industry:'Media',created:'2022-05-19',cancelled:null,users:24,subaccounts:2,phones:5,revenue:14200,msgVol:98000},
+  // New South Wales (10)
+  {id:'NSW-TST-011',name:'NewSouth Hospital Test 011',status:'active',industry:'Healthcare',created:'2019-09-14',cancelled:null,users:78,subaccounts:6,phones:14,revenue:48200,msgVol:365000},
+  {id:'NSW-TST-012',name:'NewSouth Finance Test 012',status:'active',industry:'Finance',created:'2018-04-02',cancelled:null,users:115,subaccounts:8,phones:20,revenue:67800,msgVol:521000},
+  {id:'NSW-TST-013',name:'NewSouth Government Test 013',status:'active',industry:'Government',created:'2020-11-18',cancelled:null,users:63,subaccounts:5,phones:11,revenue:41500,msgVol:298000},
+  {id:'NSW-TST-014',name:'NewSouth Retail Test 014',status:'cancelled',industry:'Retail',created:'2019-01-25',cancelled:'2025-09-15',users:15,subaccounts:1,phones:3,revenue:5600,msgVol:38000},
+  {id:'NSW-TST-015',name:'NewSouth Manufacturing Test 015',status:'active',industry:'Manufacturing',created:'2021-07-08',cancelled:null,users:39,subaccounts:3,phones:7,revenue:19800,msgVol:142000},
+  {id:'NSW-TST-016',name:'NewSouth Insurance Test 016',status:'active',industry:'Insurance',created:'2022-03-22',cancelled:null,users:27,subaccounts:2,phones:6,revenue:13400,msgVol:95000},
+  {id:'NSW-TST-017',name:'NewSouth Logistics Test 017',status:'active',industry:'Logistics',created:'2020-05-16',cancelled:null,users:44,subaccounts:3,phones:8,revenue:24600,msgVol:185000},
+  {id:'NSW-TST-018',name:'NewSouth Education Test 018',status:'cancelled',industry:'Education',created:'2018-12-11',cancelled:'2025-06-30',users:9,subaccounts:1,phones:2,revenue:2800,msgVol:19000},
+  {id:'NSW-TST-019',name:'NewSouth Property Test 019',status:'active',industry:'Real Estate',created:'2021-09-30',cancelled:null,users:31,subaccounts:2,phones:5,revenue:16200,msgVol:112000},
+  {id:'NSW-TST-020',name:'NewSouth Energy Test 020',status:'active',industry:'Energy',created:'2023-01-07',cancelled:null,users:22,subaccounts:2,phones:4,revenue:11500,msgVol:78000},
+  // Victoria (10)
+  {id:'VIC-TST-021',name:'Victoria Finance Test 021',status:'active',industry:'Finance',created:'2019-06-11',cancelled:null,users:88,subaccounts:7,phones:16,revenue:52100,msgVol:398000},
+  {id:'VIC-TST-022',name:'Victoria Healthcare Test 022',status:'active',industry:'Healthcare',created:'2020-02-14',cancelled:null,users:56,subaccounts:4,phones:10,revenue:31800,msgVol:241000},
+  {id:'VIC-TST-023',name:'Victoria Retail Test 023',status:'active',industry:'Retail',created:'2021-08-23',cancelled:null,users:34,subaccounts:2,phones:6,revenue:17400,msgVol:124000},
+  {id:'VIC-TST-024',name:'Victoria Government Test 024',status:'active',industry:'Government',created:'2018-10-05',cancelled:null,users:102,subaccounts:8,phones:18,revenue:63200,msgVol:485000},
+  {id:'VIC-TST-025',name:'Victoria Logistics Test 025',status:'cancelled',industry:'Logistics',created:'2019-03-28',cancelled:'2025-10-15',users:14,subaccounts:1,phones:3,revenue:4800,msgVol:33000},
+  {id:'VIC-TST-026',name:'Victoria Education Test 026',status:'active',industry:'Education',created:'2022-06-19',cancelled:null,users:29,subaccounts:2,phones:5,revenue:12600,msgVol:89000},
+  {id:'VIC-TST-027',name:'Victoria Insurance Test 027',status:'active',industry:'Insurance',created:'2021-11-01',cancelled:null,users:41,subaccounts:3,phones:7,revenue:21300,msgVol:158000},
+  {id:'VIC-TST-028',name:'Victoria Transport Test 028',status:'cancelled',industry:'Transport',created:'2020-04-17',cancelled:'2025-11-30',users:11,subaccounts:1,phones:2,revenue:3600,msgVol:24000},
+  {id:'VIC-TST-029',name:'Victoria Telecom Test 029',status:'active',industry:'Telecom',created:'2018-07-22',cancelled:null,users:73,subaccounts:6,phones:13,revenue:44700,msgVol:338000},
+  {id:'VIC-TST-030',name:'Victoria Manufacturing Test 030',status:'active',industry:'Manufacturing',created:'2022-09-14',cancelled:null,users:47,subaccounts:3,phones:8,revenue:25900,msgVol:192000},
+  // Western Australia (10)
+  {id:'WA-TST-031',name:'WestAus Mining Test 031',status:'active',industry:'Mining',created:'2019-11-20',cancelled:null,users:82,subaccounts:6,phones:14,revenue:49800,msgVol:374000},
+  {id:'WA-TST-032',name:'WestAus Healthcare Test 032',status:'active',industry:'Healthcare',created:'2020-08-09',cancelled:null,users:51,subaccounts:4,phones:9,revenue:29300,msgVol:218000},
+  {id:'WA-TST-033',name:'WestAus Finance Test 033',status:'active',industry:'Finance',created:'2021-01-27',cancelled:null,users:38,subaccounts:3,phones:7,revenue:21600,msgVol:160000},
+  {id:'WA-TST-034',name:'WestAus Retail Test 034',status:'cancelled',industry:'Retail',created:'2018-09-03',cancelled:'2025-07-31',users:10,subaccounts:1,phones:2,revenue:3200,msgVol:21000},
+  {id:'WA-TST-035',name:'WestAus Logistics Test 035',status:'active',industry:'Logistics',created:'2022-02-14',cancelled:null,users:25,subaccounts:2,phones:5,revenue:13800,msgVol:97000},
+  {id:'WA-TST-036',name:'WestAus Agriculture Test 036',status:'active',industry:'Agriculture',created:'2020-12-01',cancelled:null,users:16,subaccounts:1,phones:3,revenue:8400,msgVol:58000},
+  {id:'WA-TST-037',name:'WestAus Energy Test 037',status:'active',industry:'Energy',created:'2021-05-19',cancelled:null,users:43,subaccounts:3,phones:8,revenue:23700,msgVol:178000},
+  {id:'WA-TST-038',name:'WestAus Government Test 038',status:'active',industry:'Government',created:'2019-08-14',cancelled:null,users:69,subaccounts:5,phones:12,revenue:38900,msgVol:291000},
+  {id:'WA-TST-039',name:'WestAus Insurance Test 039',status:'cancelled',industry:'Insurance',created:'2020-03-28',cancelled:'2025-09-30',users:7,subaccounts:1,phones:2,revenue:2700,msgVol:17000},
+  {id:'WA-TST-040',name:'WestAus Manufacturing Test 040',status:'active',industry:'Manufacturing',created:'2023-04-05',cancelled:null,users:31,subaccounts:2,phones:6,revenue:17100,msgVol:126000},
+  // South Australia (8)
+  {id:'SA-TST-041',name:'SouthAus Healthcare Test 041',status:'active',industry:'Healthcare',created:'2020-06-15',cancelled:null,users:37,subaccounts:3,phones:7,revenue:20400,msgVol:152000},
+  {id:'SA-TST-042',name:'SouthAus Education Test 042',status:'active',industry:'Education',created:'2021-10-22',cancelled:null,users:23,subaccounts:2,phones:4,revenue:11700,msgVol:83000},
+  {id:'SA-TST-043',name:'SouthAus Retail Test 043',status:'cancelled',industry:'Retail',created:'2019-04-10',cancelled:'2025-08-15',users:8,subaccounts:1,phones:2,revenue:2900,msgVol:19000},
+  {id:'SA-TST-044',name:'SouthAus AgriWine Test 044',status:'active',industry:'Agriculture',created:'2022-07-31',cancelled:null,users:14,subaccounts:1,phones:3,revenue:7300,msgVol:51000},
+  {id:'SA-TST-045',name:'SouthAus Finance Test 045',status:'active',industry:'Finance',created:'2020-01-19',cancelled:null,users:48,subaccounts:4,phones:9,revenue:27800,msgVol:208000},
+  {id:'SA-TST-046',name:'SouthAus Government Test 046',status:'active',industry:'Government',created:'2018-06-25',cancelled:null,users:85,subaccounts:6,phones:15,revenue:51200,msgVol:389000},
+  {id:'SA-TST-047',name:'SouthAus Manufacturing Test 047',status:'cancelled',industry:'Manufacturing',created:'2020-09-08',cancelled:'2025-11-01',users:6,subaccounts:1,phones:2,revenue:2400,msgVol:15000},
+  {id:'SA-TST-048',name:'SouthAus Logistics Test 048',status:'active',industry:'Logistics',created:'2021-12-14',cancelled:null,users:32,subaccounts:2,phones:6,revenue:18100,msgVol:134000},
+  // Tasmania (2)
+  {id:'TAS-TST-049',name:'Tasmania Healthcare Test 049',status:'active',industry:'Healthcare',created:'2021-03-21',cancelled:null,users:19,subaccounts:1,phones:4,revenue:10300,msgVol:73000},
+  {id:'TAS-TST-050',name:'Tasmania Tourism Test 050',status:'active',industry:'Tourism',created:'2022-11-09',cancelled:null,users:11,subaccounts:1,phones:3,revenue:5800,msgVol:42000},
+];
+
+// ─────────────────────────────────────────────
+// SPENDING CATEGORIES
+// ─────────────────────────────────────────────
+const SPEND_CATEGORIES = [
+  {label:'Bundles — Basic Conversations', pct:22, color:'#3B82F6'},
+  {label:'Bundles — Enterprise', pct:15, color:'#6366F1'},
+  {label:'License Fees — User', pct:14, color:'#8B5CF6'},
+  {label:'Dedicated Numbers', pct:11, color:'#10B981'},
+  {label:'License Fees — Platform', pct:9, color:'#14B8A6'},
+  {label:'Bundles — Custom', pct:8, color:'#F59E0B'},
+  {label:'MMS Outbound', pct:7, color:'#EF4444'},
+  {label:'International Sending', pct:5, color:'#F97316'},
+  {label:'Sending Overage', pct:5, color:'#EC4899'},
+  {label:'Other', pct:4, color:'#94A3B8'},
+];
+
+// ─────────────────────────────────────────────
+// CONSTANTS
+// ─────────────────────────────────────────────
+const TOTAL_ENGAGE_GP_USD = 8000000;
+const TOTAL_ENGAGE_VOL = 100000000;
+const FX = { USD: 1, AUD: 1.525, SEK: 10.42 };
+const SYMBOLS = { USD: '$', AUD: 'A$', SEK: 'kr' };
+
+let currentCurrency = 'USD';
+let sortKey = 'msgVol';
+let sortAsc = false;
+let msgSortAsc = false;
+let costsOpen = false;
+
+// ─────────────────────────────────────────────
+// UTILS
+// ─────────────────────────────────────────────
+function fmt(n, currency) {
+  const sym = SYMBOLS[currency || currentCurrency];
+  const rate = FX[currency || currentCurrency];
+  const val = n * rate;
+  if (val >= 1000000) return sym + (val/1000000).toFixed(1) + 'M';
+  if (val >= 1000) return sym + Math.round(val).toLocaleString();
+  return sym + val.toFixed(2);
+}
+
+function fmtShort(n) {
+  if (n >= 1000000) return (n/1000000).toFixed(1)+'M';
+  if (n >= 1000) return (n/1000).toFixed(0)+'k';
+  return n.toString();
+}
+
+function calcLTV(acc) {
+  const start = new Date(acc.created);
+  const end = acc.cancelled ? new Date(acc.cancelled) : new Date('2026-05-28');
+  return (end - start) / (1000*60*60*24*365.25);
+}
+
+function calcRevenue() {
+  const statusF = document.getElementById('statusFilter').value;
+  return ACCOUNTS
+    .filter(a => statusF === 'all' || a.status === statusF)
+    .reduce((s,a) => s + a.revenue, 0);
+}
+
+// ─────────────────────────────────────────────
+// CURRENCY
+// ─────────────────────────────────────────────
+function setCurrency(c) {
+  currentCurrency = c;
+  document.querySelectorAll('.currency-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('costsCurrencyLabel').textContent = c;
+  updateFinancials();
+  renderSpendTable();
+}
+
+// ─────────────────────────────────────────────
+// COSTS TOGGLE
+// ─────────────────────────────────────────────
+function toggleCosts() {
+  costsOpen = !costsOpen;
+  document.getElementById('costsBody').style.display = costsOpen ? 'block' : 'none';
+  document.getElementById('costsToggle').classList.toggle('open', costsOpen);
+}
+
+// ─────────────────────────────────────────────
+// FINANCIALS RECALC
+// ─────────────────────────────────────────────
+function recalcCosts() {
+  updateFinancials();
+}
+
+function getManualCosts() {
+  const ids = ['cSalary','cEng','cDesign','cProduct','cInfra','cSupport','cMaint','cOther'];
+  const vals = ids.map(id => parseFloat(document.getElementById(id).value) || 0);
+  const hasAny = vals.some(v => v > 0);
+  if (!hasAny) return null;
+  // multiply monthly by 6 months
+  return vals.reduce((s,v) => s + v, 0) * 6;
+}
+
+function updateFinancials() {
+  const rev = calcRevenue();
+  const manualCosts = getManualCosts();
+  const projected = manualCosts === null;
+  const costs = projected ? rev * 0.42 : manualCosts;
+  const gp = rev - costs;
+  const margin = (gp / rev * 100).toFixed(1);
+
+  document.getElementById('metRevenue').textContent = fmt(rev);
+  document.getElementById('metCosts').textContent = fmt(costs);
+  document.getElementById('metCosts').parentElement.querySelector('.metric-sub').textContent =
+    projected ? '42% projected (no manual input)' : 'Sum of entered costs × 6 months';
+  document.getElementById('metGP').textContent = fmt(gp);
+  document.getElementById('metMargin').textContent = margin + '%';
+  document.getElementById('projBanner').style.display = projected ? 'flex' : 'none';
+
+  const gpUSD = gp; // raw in USD
+  const totalEngGP = TOTAL_ENGAGE_GP_USD;
+  const pct = (gpUSD / totalEngGP * 100).toFixed(1);
+  document.getElementById('engageGPContrib').textContent = pct + '%';
+  document.getElementById('totalEngageGP').textContent = fmt(totalEngGP);
+  document.getElementById('segGPDisplay').textContent = fmt(gpUSD);
+
+  // Update GP pie
+  if (window.gpPie) {
+    window.gpPie.data.datasets[0].data = [gp, totalEngGP - gp];
+    window.gpPie.data.datasets[0].label = currentCurrency;
+    window.gpPie.update();
+  }
+}
+
+// ─────────────────────────────────────────────
+// CHIPS
+// ─────────────────────────────────────────────
+function renderChips() {
+  const wrap = document.getElementById('accountChips');
+  wrap.innerHTML = ACCOUNTS.map(a =>
+    `<span class="chip ${a.status === 'active' ? 'chip-active' : 'chip-cancelled'}" title="${a.id}">${a.name}</span>`
+  ).join('');
+}
+
+// ─────────────────────────────────────────────
+// ACCOUNT TABLE
+// ─────────────────────────────────────────────
+function sortTable(key) {
+  if (sortKey === key) sortAsc = !sortAsc;
+  else { sortKey = key; sortAsc = false; }
+  renderAccountTable();
+}
+
+function renderAccountTable() {
+  const search = document.getElementById('tableSearch').value.toLowerCase();
+  const statusF = document.getElementById('tableStatusFilter').value;
+  let data = [...ACCOUNTS];
+
+  if (search) data = data.filter(a => a.name.toLowerCase().includes(search) || a.id.toLowerCase().includes(search));
+  if (statusF !== 'all') data = data.filter(a => a.status === statusF);
+
+  data.sort((a,b) => {
+    let av, bv;
+    if (sortKey === 'ltv') { av = calcLTV(a); bv = calcLTV(b); }
+    else if (sortKey === 'name') { av = a.name; bv = b.name; return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av); }
+    else if (sortKey === 'id') { av = a.id; bv = b.id; return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av); }
+    else if (sortKey === 'created') { av = new Date(a.created); bv = new Date(b.created); }
+    else { av = a[sortKey] || 0; bv = b[sortKey] || 0; }
+    return sortAsc ? av - bv : bv - av;
+  });
+
+  const tbody = document.getElementById('accountTableBody');
+  tbody.innerHTML = data.map(a => {
+    const ltv = calcLTV(a);
+    const ltvStr = ltv >= 1 ? ltv.toFixed(1) + ' yrs' : Math.round(ltv*12) + ' mo';
+    return `<tr>
+      <td style="font-weight:500;">${a.name}</td>
+      <td style="font-family:monospace;font-size:12px;color:#64748B;">${a.id}</td>
+      <td><span class="${a.status==='active'?'badge-active':'badge-cancelled'}">${a.status==='active'?'Active':'Cancelled'}</span></td>
+      <td>${a.industry}</td>
+      <td>${a.created}</td>
+      <td>${a.cancelled || '—'}</td>
+      <td>${ltvStr}</td>
+      <td>${a.users}</td>
+      <td>${fmtShort(a.msgVol)}</td>
+      <td>${a.phones}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ─────────────────────────────────────────────
+// FILTERS
+// ─────────────────────────────────────────────
+function applyFilters() {
+  updateFinancials();
+  renderAccountTable();
+}
+
+// ─────────────────────────────────────────────
+// METRICS SECTION 3
+// ─────────────────────────────────────────────
+function renderSection3Metrics() {
+  const ltvVals = ACCOUNTS.map(a => calcLTV(a));
+  const avgLTV = ltvVals.reduce((s,v) => s+v,0) / ACCOUNTS.length;
+  const avgSub = ACCOUNTS.reduce((s,a) => s+a.subaccounts,0) / ACCOUNTS.length;
+  const avgUsers = ACCOUNTS.reduce((s,a) => s+a.users,0) / ACCOUNTS.length;
+  const avgPhones = ACCOUNTS.reduce((s,a) => s+a.phones,0) / ACCOUNTS.length;
+
+  document.getElementById('metLTV').textContent = avgLTV.toFixed(1) + ' yrs';
+  document.getElementById('metSubaccounts').textContent = avgSub.toFixed(1);
+  document.getElementById('metUsers').textContent = avgUsers.toFixed(1);
+  document.getElementById('metPhones').textContent = avgPhones.toFixed(1);
+}
+
+// ─────────────────────────────────────────────
+// MSG BARS (Horizontal bar chart, section 3)
+// ─────────────────────────────────────────────
+function renderMsgBars() {
+  const sorted = [...ACCOUNTS].sort((a,b) => b.msgVol - a.msgVol);
+  const avg = ACCOUNTS.reduce((s,a) => s+a.msgVol,0) / ACCOUNTS.length;
+  const max = sorted[0].msgVol;
+  const container = document.getElementById('msgBars');
+  container.innerHTML = sorted.map(a => {
+    const pct = (a.msgVol / max * 100).toFixed(1);
+    const avgPct = (avg / max * 100).toFixed(1);
+    const isAboveAvg = a.msgVol >= avg;
+    return `<div class="hbar-row">
+      <div class="hbar-name" title="${a.name}">${a.name.replace(/ Test \d+/,'')}</div>
+      <div class="hbar-track">
+        <div class="hbar-fill${isAboveAvg?' highlight':''}" style="width:${pct}%"></div>
+        <div class="avg-line-marker" style="left:${avgPct}%" title="Avg: ${fmtShort(avg)}"></div>
+      </div>
+      <div class="hbar-val">${fmtShort(a.msgVol)}</div>
+    </div>`;
+  }).join('');
+}
+
+// ─────────────────────────────────────────────
+// SPEND TABLE (Section 4)
+// ─────────────────────────────────────────────
+function renderSpendTable() {
+  const totalRev = ACCOUNTS.reduce((s,a) => s+a.revenue,0);
+  const table = document.getElementById('spendTable');
+  table.innerHTML = '<thead><tr><th style="padding:9px 0;font-size:11px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:0.04em;">Category</th><th style="padding:9px 0;text-align:right;font-size:11px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:0.04em;">Amount</th><th style="padding:9px 0;text-align:right;font-size:11px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:0.04em;">% of Total</th><th style="padding:9px 0;font-size:11px;font-weight:700;color:#64748B;text-transform:uppercase;letter-spacing:0.04em;text-align:right;">Detail</th></tr></thead>' +
+    '<tbody>' + SPEND_CATEGORIES.map(c => {
+      const amt = totalRev * c.pct / 100;
+      return `<tr>
+        <td style="padding:8px 0;border-bottom:1px solid #F1F5F9;">
+          <span class="spend-dot" style="background:${c.color};"></span>${c.label}
+        </td>
+        <td style="padding:8px 0;border-bottom:1px solid #F1F5F9;text-align:right;font-weight:600;">${fmt(amt)}</td>
+        <td style="padding:8px 0;border-bottom:1px solid #F1F5F9;text-align:right;color:#64748B;">${c.pct}%</td>
+        <td style="padding:8px 0;border-bottom:1px solid #F1F5F9;text-align:right;"><span class="deep-link">View →</span></td>
+      </tr>`;
+    }).join('') + '</tbody>';
+}
+
+// ─────────────────────────────────────────────
+// MESSAGING VOLUME TABLE (Section 5)
+// ─────────────────────────────────────────────
+function sortMsgTable(key) {
+  msgSortAsc = !msgSortAsc;
+  renderMsgTable();
+}
+
+function renderMsgTable() {
+  const months = ['Jan','Feb','Mar','Apr','May','Jun'];
+  const sorted = [...ACCOUNTS].sort((a,b) => msgSortAsc ? a.msgVol - b.msgVol : b.msgVol - a.msgVol);
+  const tbody = document.getElementById('msgTableBody');
+  tbody.innerHTML = sorted.map(a => {
+    // Generate monthly breakdown (proportional with some noise)
+    const base = a.msgVol / 6;
+    const monthly = months.map((m,i) => {
+      const noise = 0.7 + Math.random() * 0.6;
+      return Math.round(base * noise);
+    });
+    return `<tr>
+      <td style="font-weight:500;">${a.name}</td>
+      <td><span class="${a.status==='active'?'badge-active':'badge-cancelled'}">${a.status==='active'?'Active':'Cancelled'}</span></td>
+      <td style="font-weight:600;">${fmtShort(a.msgVol)}</td>
+      ${monthly.map(v => `<td style="color:#64748B;">${fmtShort(v)}</td>`).join('')}
+    </tr>`;
+  }).join('');
+
+  // Totals row
+  const totalRow = document.getElementById('msgTableBody');
+  // already rendered above
+}
+
+// ─────────────────────────────────────────────
+// CHANNEL TABLE
+// ─────────────────────────────────────────────
+function renderChannelTable() {
+  const channelPcts = [0.35, 0.30, 0.20, 0.10, 0.05];
+  const sorted = [...ACCOUNTS].sort((a,b) => b.msgVol - a.msgVol).slice(0,15);
+  const tbody = document.getElementById('channelTableBody');
+  tbody.innerHTML = sorted.map(a => {
+    const channels = channelPcts.map(p => Math.round(a.msgVol * p * (0.85 + Math.random()*0.3)));
+    const tot = channels.reduce((s,v)=>s+v,0);
+    return `<tr>
+      <td style="font-weight:500;">${a.name}</td>
+      ${channels.map(v => `<td>${fmtShort(v)}<br><span style="font-size:11px;color:#94A3B8;">${(v/tot*100).toFixed(0)}%</span></td>`).join('')}
+      <td style="font-weight:600;">${fmtShort(tot)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ─────────────────────────────────────────────
+// CHARTS
+// ─────────────────────────────────────────────
+function initCharts() {
+  Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+  Chart.defaults.font.size = 12;
+
+  const totalRev = ACCOUNTS.reduce((s,a) => s+a.revenue,0);
+  const totalVol = ACCOUNTS.reduce((s,a) => s+a.msgVol,0);
+  const totalCosts = totalRev * 0.42;
+  const totalGP = totalRev - totalCosts;
+
+  // GP Pie
+  window.gpPie = new Chart(document.getElementById('gpPieChart'), {
+    type: 'doughnut',
+    data: {
+      labels: ['Segment GP', 'Rest of Engage GP'],
+      datasets: [{
+        data: [totalGP, TOTAL_ENGAGE_GP_USD - totalGP],
+        backgroundColor: ['#2563EB','#E2E8F0'],
+        borderColor: ['#fff','#fff'],
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      cutout: '65%',
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 12, padding: 14, font:{size:12} } },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.label}: ${fmt(ctx.raw)} (${(ctx.raw/TOTAL_ENGAGE_GP_USD*100).toFixed(1)}%)`
+          }
+        }
+      }
+    }
+  });
+
+  // Composition Pie
+  const activeCount = ACCOUNTS.filter(a=>a.status==='active').length;
+  const cancelCount = ACCOUNTS.filter(a=>a.status==='cancelled').length;
+  new Chart(document.getElementById('compositionChart'), {
+    type: 'doughnut',
+    data: {
+      labels: [`Active (${activeCount})`, `Cancelled (${cancelCount})`],
+      datasets: [{
+        data: [activeCount, cancelCount],
+        backgroundColor: ['#22C55E','#EF4444'],
+        borderColor: ['#fff','#fff'],
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      cutout: '60%',
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 12, padding: 14, font:{size:12} } },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.label}: ${(ctx.raw/ACCOUNTS.length*100).toFixed(0)}%`
+          }
+        }
+      }
+    }
+  });
+
+  // Year Bar
+  const years = {};
+  ACCOUNTS.forEach(a => {
+    const y = new Date(a.created).getFullYear();
+    years[y] = (years[y]||0) + 1;
+  });
+  const sortedYears = Object.keys(years).sort();
+  new Chart(document.getElementById('yearChart'), {
+    type: 'bar',
+    data: {
+      labels: sortedYears,
+      datasets: [{
+        label: 'Accounts registered',
+        data: sortedYears.map(y => years[y]),
+        backgroundColor: '#3B82F6',
+        borderRadius: 6,
+      }]
+    },
+    options: {
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.raw} accounts (${(ctx.raw/ACCOUNTS.length*100).toFixed(0)}%)`
+          }
+        }
+      },
+      scales: {
+        y: { beginAtZero: true, grid: { color: '#F1F5F9' }, ticks: { stepSize: 2 } },
+        x: { grid: { display: false } }
+      }
+    }
+  });
+
+  // Spend Pie
+  new Chart(document.getElementById('spendPieChart'), {
+    type: 'doughnut',
+    data: {
+      labels: SPEND_CATEGORIES.map(c => c.label),
+      datasets: [{
+        data: SPEND_CATEGORIES.map(c => c.pct),
+        backgroundColor: SPEND_CATEGORIES.map(c => c.color),
+        borderColor: '#fff',
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      cutout: '50%',
+      plugins: {
+        legend: { position: 'right', labels: { boxWidth: 10, padding: 10, font:{size:11} } },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.label}: ${ctx.raw}% · ${fmt(totalRev * ctx.raw / 100)}`
+          }
+        }
+      }
+    }
+  });
+
+  // Messaging Volume Pie
+  new Chart(document.getElementById('msgPieChart'), {
+    type: 'doughnut',
+    data: {
+      labels: [`Segment (${(totalVol/TOTAL_ENGAGE_VOL*100).toFixed(1)}%)`, `Rest of Engage`],
+      datasets: [{
+        data: [totalVol, TOTAL_ENGAGE_VOL - totalVol],
+        backgroundColor: ['#6366F1','#E2E8F0'],
+        borderColor: ['#fff','#fff'],
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      cutout: '60%',
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 12, padding: 14, font:{size:12} } },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.label}: ${fmtShort(ctx.raw)} messages`
+          }
+        }
+      }
+    }
+  });
+
+  // Channel Bar
+  const channelLabels = ['CRM (HubSpot/Zoho/SF)','Engage HUB Web','Sinch Mobile App','email2SMS','Other'];
+  const channelPcts = [0.35, 0.30, 0.20, 0.10, 0.05];
+  const channelColors = ['#3B82F6','#6366F1','#10B981','#F59E0B','#94A3B8'];
+  new Chart(document.getElementById('channelChart'), {
+    type: 'bar',
+    data: {
+      labels: channelLabels,
+      datasets: [{
+        label: 'Avg messages per account',
+        data: channelPcts.map(p => Math.round(totalVol / ACCOUNTS.length * p)),
+        backgroundColor: channelColors,
+        borderRadius: 6,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${fmtShort(ctx.raw)} avg msgs · ${(channelPcts[ctx.dataIndex]*100).toFixed(0)}%`
+          }
+        }
+      },
+      scales: {
+        x: { beginAtZero: true, grid: { color: '#F1F5F9' } },
+        y: { grid: { display: false }, ticks: { font: {size:11} } }
+      }
+    }
+  });
+}
+
+// ─────────────────────────────────────────────
+// SECTION 5 METRICS
+// ─────────────────────────────────────────────
+function renderSection5Metrics() {
+  const totalVol = ACCOUNTS.reduce((s,a) => s+a.msgVol,0);
+  document.getElementById('metSegVol').textContent = totalVol.toLocaleString();
+  document.getElementById('metTotalVol').textContent = TOTAL_ENGAGE_VOL.toLocaleString();
+}
+
+// ─────────────────────────────────────────────
+// SCROLL NAV
+// ─────────────────────────────────────────────
+function scrollTo(id) {
+  document.getElementById(id).scrollIntoView({behavior:'smooth', block:'start'});
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const idx = ['s1','s2','s3','s4','s5'].indexOf(id);
+  document.querySelectorAll('.nav-item')[idx].classList.add('active');
+}
+
+// Highlight nav on scroll
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      const id = e.target.id;
+      const idx = ['s1','s2','s3','s4','s5'].indexOf(id);
+      if (idx >= 0) {
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+        document.querySelectorAll('.nav-item')[idx].classList.add('active');
+      }
+    }
+  });
+}, { threshold: 0.3 });
+
+// ─────────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────────
+function bootApp() {
+  renderChips();
+  renderAccountTable();
+  renderSection3Metrics();
+  renderMsgBars();
+  renderSpendTable();
+  renderMsgTable();
+  renderChannelTable();
+  renderSection5Metrics();
+  updateFinancials();
+  initCharts();
+
+  ['s1','s2','s3','s4','s5'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) observer.observe(el);
+  });
+}
+
+// Expose for pw-gate unlock trigger
+window.__initCharts = bootApp;
+
+document.addEventListener('DOMContentLoaded', () => {
+  // If already authenticated (sessionStorage), boot immediately
+  if (sessionStorage.getItem('gp_auth') === '1') {
+    bootApp();
+  }
+  // Otherwise bootApp() is called by tryUnlock() after correct password
+});
+</script>
+</body>
+</html>
